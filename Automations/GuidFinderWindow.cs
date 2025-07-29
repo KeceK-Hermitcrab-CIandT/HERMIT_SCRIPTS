@@ -1,7 +1,10 @@
+#if UNITY_EDITOR
 using UnityEditor;
 using UnityEngine;
 
-/// <summary>
+namespace HERMIT_SCRIPTS
+{
+    /// <summary>
     /// Window to find an asset by its GUID and parent folder path.
     /// </summary>
     public class GuidFinderWindow : EditorWindow
@@ -32,14 +35,14 @@ using UnityEngine;
                 EditorGUILayout.ObjectField("Asset:", _foundAsset, typeof(Object), false);
                 if (_foundAsset != null)
                 {
-                    if(GUILayout.Button("Ping in Project"))
+                    if (GUILayout.Button("Ping in Project"))
                     {
                         EditorGUIUtility.PingObject(_foundAsset);
                     }
                 }
             }
         }
-        
+
         private void FindByGuid()
         {
             _foundAssetPath = AssetDatabase.GUIDToAssetPath(_guidInput);
@@ -48,13 +51,18 @@ using UnityEngine;
                 Debug.LogWarning($"No asset found with GUID: {_guidInput}");
                 _foundAsset = null;
             }
-            else if (!_foundAssetPath.StartsWith(_parentFolderPath)) {
-                Debug.LogWarning($"Asset found, but does not start with \"{_parentFolderPath}\" – full path: {_foundAssetPath}");
+            else if (!_foundAssetPath.StartsWith(_parentFolderPath))
+            {
+                Debug.LogWarning(
+                    $"Asset found, but does not start with \"{_parentFolderPath}\" – full path: {_foundAssetPath}");
                 _foundAsset = AssetDatabase.LoadAssetAtPath<Object>(_foundAssetPath);
             }
-            else {
+            else
+            {
                 _foundAsset = AssetDatabase.LoadAssetAtPath<Object>(_foundAssetPath);
                 Debug.Log($"Found asset: {_foundAssetPath} → {_foundAsset.name}", _foundAsset);
             }
         }
     }
+}
+#endif
