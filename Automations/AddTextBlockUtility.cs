@@ -16,6 +16,9 @@ namespace HERMIT_SCRIPTS
 {
 	public class AddTextBlockUtility : EditorWindow
 	{
+		private const string TARGET_FONT_NAME = "Prisms Standard Roboto";
+
+		private const string NEW_FONT_ASSET_NAME = "Prisms Standard Roboto-Regular.lfs";
 
 		private static List<StringTableCollection> cachedStringTables = null;
 
@@ -103,6 +106,8 @@ namespace HERMIT_SCRIPTS
 
 		private static void SetupNewTextBlock(TextBlock textBlock, TMP_Text tmpText)
 		{
+			CheckAndReplaceFont(tmpText);
+
 			// Set the TPM_Text and text from TMP_Text
 			SetRectAndTMP(textBlock, tmpText);
 
@@ -381,6 +386,46 @@ namespace HERMIT_SCRIPTS
 			}
 		}
 
+		public static void CheckAndReplaceFont(TMP_Text textComponent)
+		{
+			var newFont = LoadTargetFont();
+			if (textComponent == null || newFont == null)
+				return;
+
+			if (textComponent.font != null && textComponent.font.name.Contains(TARGET_FONT_NAME))
+				return;
+
+			string oldFontName = textComponent.font != null ? textComponent.font.name : "None";
+
+			Debug.Log($"Changing font on '{textComponent.name}'. Old font: '{oldFontName}', New font: '{newFont.name}'");
+
+			// Assign the new font.
+			textComponent.font = newFont;
+		}
+
+		/// <summary>
+		/// Loads the target TMP_FontAsset from the specified project path.
+		/// </summary>
+		/// <returns>The loaded TMP_FontAsset, or null if not found.</returns>
+		private static TMP_FontAsset LoadTargetFont()
+		{
+			string[] guids = AssetDatabase.FindAssets(NEW_FONT_ASSET_NAME);
+			if (guids.Length == 0)
+			{
+				Debug.LogError($"Font Error: Could not find the font asset '{NEW_FONT_ASSET_NAME}'. Please verify the asset exists in the project.");
+				return null;
+			}
+
+			string fontAssetPath = AssetDatabase.GUIDToAssetPath(guids[0]);
+			TMP_FontAsset font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(fontAssetPath);
+
+			if (font == null)
+			{
+				Debug.LogError($"Font Error: Could not load the font asset at path '{fontAssetPath}'. Please verify the asset is a valid TMP_FontAsset.");
+			}
+
+			return font;
+		}
 		[MenuItem("Tools/Add TextBlock Component", true)]
 		public static bool ValidateAddTextBlockToSelectedObjects()
 		{
@@ -388,4 +433,5 @@ namespace HERMIT_SCRIPTS
 		}
 	}
 }
+
 #endif
