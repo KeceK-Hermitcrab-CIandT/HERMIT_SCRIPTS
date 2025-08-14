@@ -146,21 +146,63 @@ namespace HERMIT_SCRIPTS
 
 			var targetMap = targetChildren.ToDictionary(child => GetRelativePath(targetRoot.transform, child.transform));
 
+			// First pass: Create/identify all GameObjects
+			foreach (var sourceChild in sourceChildren)
+			{
+				string relativePath = GetRelativePath(sourceRoot.transform, sourceChild.transform);
+
+				if (!targetMap.TryGetValue(relativePath, out GameObject existingTargetChild))
+				{
+					// Object is new, create it.
+					CreateNewGameObject(sourceChild, sourceRoot, targetRoot);
+				}
+			}
+
+			// Build reference mapping after all GameObjects exist
+			Dictionary<GameObject, GameObject> referenceMap = BuildReferenceMap(sourceRoot, targetRoot);
+
+			// Second pass: Copy components with proper reference remapping
 			foreach (var sourceChild in sourceChildren)
 			{
 				string relativePath = GetRelativePath(sourceRoot.transform, sourceChild.transform);
 
 				if (targetMap.TryGetValue(relativePath, out GameObject existingTargetChild))
 				{
-					// Object exists, so sync its components.
-					SyncComponents(sourceChild, existingTargetChild);
+					// Object exists, sync its components with reference remapping
+					SyncComponentsWithReferenceMapping(sourceChild, existingTargetChild, referenceMap);
 				}
 				else
 				{
-					// Object is new, create it.
-					CreateNewGameObject(sourceChild, sourceRoot, targetRoot);
+					// Find the newly created object
+					Transform targetTransform = FindChildByPath(targetRoot.transform, relativePath);
+					if (targetTransform != null)
+					{
+						SyncComponentsWithReferenceMapping(sourceChild, targetTransform.gameObject, referenceMap);
+					}
 				}
 			}
+		}
+
+		private Dictionary<GameObject, GameObject> BuildReferenceMap(GameObject sourceRoot, GameObject targetRoot)
+		{
+			var referenceMap = new Dictionary<GameObject, GameObject>();
+
+			// Add root mapping
+			referenceMap[sourceRoot] = targetRoot;
+
+			// Add all children mappings
+			var sourceChildren = GetAllChildObjects(sourceRoot);
+			foreach (var sourceChild in sourceChildren)
+			{
+				string relativePath = GetRelativePath(sourceRoot.transform, sourceChild.transform);
+				Transform targetTransform = FindChildByPath(targetRoot.transform, relativePath);
+				if (targetTransform != null)
+				{
+					referenceMap[sourceChild] = targetTransform.gameObject;
+				}
+			}
+
+			return referenceMap;
 		}
 
 		private void CreateNewGameObject(GameObject sourceObj, GameObject sourceRoot, GameObject targetRoot)
@@ -175,7 +217,7 @@ namespace HERMIT_SCRIPTS
 				return;
 			}
 
-			GameObject newObj = new GameObject(sourceObj.name);
+			GameObject newObj = new(sourceObj.name);
 			Undo.RegisterCreatedObjectUndo(newObj, "Create " + newObj.name);
 			newObj.transform.SetParent(targetParent);
 
@@ -184,10 +226,7 @@ namespace HERMIT_SCRIPTS
 			newObj.transform.localRotation = sourceObj.transform.localRotation;
 			newObj.transform.localScale = sourceObj.transform.localScale;
 
-			// Copy all components
-			SyncComponents(sourceObj, newObj);
-
-			Debug.Log($"Copied new GameObject: {GetRelativePath(targetRoot.transform, newObj.transform)}");
+			Debug.Log($"Created new GameObject: {GetRelativePath(targetRoot.transform, newObj.transform)}");
 		}
 
 		private void SyncComponents(GameObject source, GameObject target)
@@ -218,6 +257,106 @@ namespace HERMIT_SCRIPTS
 			}
 		}
 
+		private void SyncComponentsWithReferenceMapping(GameObject source, GameObject target, Dictionary<GameObject, GameObject> referenceMap)
+		{
+			foreach (var sourceComp in source.GetComponents<Component>())
+			{
+				if (sourceComp is Transform) continue;
+
+				System.Type compType = sourceComp.GetType();
+
+				// Check if the target already has this component.
+				var targetComp = target.GetComponent(compType);
+				if (targetComp != null)
+				{
+					// If it exists, only overwrite if the user allows it.
+					if (!preserveExistingComponents)
+					{
+						Undo.RecordObject(targetComp, "Overwrite Component");
+						CopyComponentWithReferenceMapping(sourceComp, targetComp, referenceMap);
+					}
+				}
+				else
+				{
+					// If it doesn't exist, add it and copy the values.
+					Component newComp = Undo.AddComponent(target, compType);
+					CopyComponentWithReferenceMapping(sourceComp, newComp, referenceMap);
+				}
+			}
+		}
+
+		private void CopyComponentWithReferenceMapping(Component source, Component target, Dictionary<GameObject, GameObject> referenceMap)
+		{
+			// First copy normally
+			EditorUtility.CopySerialized(source, target);
+
+			// Then remap references using SerializedObject
+			var serializedTarget = new SerializedObject(target);
+			RemapReferences(serializedTarget, referenceMap);
+			serializedTarget.ApplyModifiedProperties();
+		}
+
+		private void RemapReferences(SerializedObject serializedObject, Dictionary<GameObject, GameObject> referenceMap)
+		{
+			var property = serializedObject.GetIterator();
+			bool enterChildren = true;
+
+			while (property.Next(enterChildren))
+			{
+				enterChildren = true;
+
+				if (property.propertyType == SerializedPropertyType.ObjectReference)
+				{
+					if (property.objectReferenceValue != null)
+					{
+						// Check if it's a GameObject reference that needs remapping
+						if (property.objectReferenceValue is GameObject gameObjectRef)
+						{
+							if (referenceMap.TryGetValue(gameObjectRef, out GameObject mappedGameObject))
+							{
+								property.objectReferenceValue = mappedGameObject;
+							}
+						}
+						// Check if it's a Component reference that needs remapping
+						else if (property.objectReferenceValue is Component componentRef)
+						{
+							if (referenceMap.TryGetValue(componentRef.gameObject, out GameObject mappedGameObject))
+							{
+								// Find the equivalent component on the mapped GameObject
+								var mappedComponent = mappedGameObject.GetComponent(componentRef.GetType());
+								if (mappedComponent != null)
+								{
+									property.objectReferenceValue = mappedComponent;
+								}
+							}
+						}
+						// For Transform references, also remap
+						else if (property.objectReferenceValue is Transform transformRef)
+						{
+							if (referenceMap.TryGetValue(transformRef.gameObject, out GameObject mappedGameObject))
+							{
+								property.objectReferenceValue = mappedGameObject.transform;
+							}
+						}
+					}
+				}
+				// Don't enter children for these property types to avoid infinite loops
+				else if (property.propertyType == SerializedPropertyType.String ||
+						property.propertyType == SerializedPropertyType.Integer ||
+						property.propertyType == SerializedPropertyType.Boolean ||
+						property.propertyType == SerializedPropertyType.Float ||
+						property.propertyType == SerializedPropertyType.Color ||
+						property.propertyType == SerializedPropertyType.Vector2 ||
+						property.propertyType == SerializedPropertyType.Vector3 ||
+						property.propertyType == SerializedPropertyType.Vector4 ||
+						property.propertyType == SerializedPropertyType.Quaternion ||
+						property.propertyType == SerializedPropertyType.Enum)
+				{
+					enterChildren = false;
+				}
+			}
+		}
+
 		private void CopyTimeflowComponent(GameObject source, GameObject target)
 		{
 			var sourceTimeflow = source.GetComponent<Timeflow>();
@@ -228,8 +367,12 @@ namespace HERMIT_SCRIPTS
 				if (targetTimeflow != null)
 				{
 					Undo.RecordObject(targetTimeflow, "Copy Timeflow Settings");
-					EditorUtility.CopySerialized(sourceTimeflow, targetTimeflow);
-					Debug.Log("Timeflow component settings updated.");
+
+					// Build reference map for timeflow component
+					Dictionary<GameObject, GameObject> referenceMap = BuildReferenceMap(source, target);
+					CopyComponentWithReferenceMapping(sourceTimeflow, targetTimeflow, referenceMap);
+
+					Debug.Log("Timeflow component settings updated with proper reference remapping.");
 				}
 				else
 				{
@@ -332,8 +475,7 @@ namespace HERMIT_SCRIPTS
 
 		private Transform FindChildByPath(Transform root, string path)
 		{
-			if (string.IsNullOrEmpty(path)) return root;
-			return root.Find(path);
+			return string.IsNullOrEmpty(path) ? root : root.Find(path);
 		}
 		#endregion
 	}
