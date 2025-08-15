@@ -1,16 +1,16 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
-using System.Linq;
-using UnityEngine;
-using UnityEditor;
 using System.IO;
+using System.Linq;
+using UnityEditor;
+using UnityEngine;
 
 namespace HERMIT_SCRIPTS
 {
     public class SceneScriptAnalyzer : EditorWindow
     {
         private Vector2 scrollPosition;
-        private Dictionary<string, List<string>> scriptsByFolder = new Dictionary<string, List<string>>();
+        private Dictionary<string, List<string>> scriptsByFolder = new();
         private bool showFullPaths = false;
         private bool groupByFolder = true;
 
@@ -54,59 +54,92 @@ namespace HERMIT_SCRIPTS
             scriptsByFolder.Clear();
 
             // Get all GameObjects in the scene
-            GameObject[] allObjects = FindObjectsOfType<GameObject>();
-            HashSet<string> uniqueScripts = new HashSet<string>();
+            GameObject[] allObjects = FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            HashSet<string> uniqueScripts = new();
 
-            foreach (GameObject obj in allObjects)
+            int totalObjects = allObjects.Length;
+            int progressId = Progress.Start("Analyzing Scene Scripts", "Scanning GameObjects...", Progress.Options.Sticky);
+
+            try
             {
-                // Get all MonoBehaviour components
-                MonoBehaviour[] scripts = obj.GetComponents<MonoBehaviour>();
-
-                foreach (MonoBehaviour script in scripts)
+                for (int i = 0; i < allObjects.Length; i++)
                 {
-                    if (script == null) continue; // Skip missing scripts
+                    GameObject obj = allObjects[i];
 
-                    // Get the script's type
-                    System.Type scriptType = script.GetType();
+                    // Update progress
+                    float progressValue = (float)i / totalObjects;
+                    Progress.Report(progressId, progressValue, $"Processing GameObject {i + 1}/{totalObjects}: {obj.name}");
 
-                    // Find the script file path
-                    string scriptPath = GetScriptPath(scriptType);
+                    // Get all MonoBehaviour components
+                    MonoBehaviour[] scripts = obj.GetComponents<MonoBehaviour>();
 
-                    if (!string.IsNullOrEmpty(scriptPath))
+                    foreach (MonoBehaviour script in scripts)
                     {
-                        uniqueScripts.Add(scriptPath);
+                        if (script == null) continue; // Skip missing scripts
+
+                        // Get the script's type
+                        System.Type scriptType = script.GetType();
+
+                        // Find the script file path
+                        string scriptPath = GetScriptPath(scriptType);
+
+                        if (!string.IsNullOrEmpty(scriptPath))
+                        {
+                            uniqueScripts.Add(scriptPath);
+                        }
+                    }
+
+                    // Force UI update every 50 objects
+                    if (i % 15 == 0)
+                    {
+                        EditorUtility.DisplayProgressBar("Analyzing Scene Scripts",
+                            $"Processing GameObject {i + 1}/{totalObjects}: {obj.name}",
+                            progressValue);
                     }
                 }
-            }
 
-            // Organize scripts by folder
-            foreach (string scriptPath in uniqueScripts)
+                // Update progress for organizing phase
+                Progress.Report(progressId, 0.9f, "Organizing scripts by folder...");
+                EditorUtility.DisplayProgressBar("Analyzing Scene Scripts", "Organizing scripts by folder...", 0.9f);
+
+                // Organize scripts by folder
+                foreach (string scriptPath in uniqueScripts)
+                {
+                    string folderPath = Path.GetDirectoryName(scriptPath);
+                    string fileName = Path.GetFileName(scriptPath);
+
+                    if (string.IsNullOrEmpty(folderPath))
+                        folderPath = "Root";
+
+                    if (!scriptsByFolder.ContainsKey(folderPath))
+                        scriptsByFolder[folderPath] = new List<string>();
+
+                    scriptsByFolder[folderPath].Add(fileName);
+                }
+
+                // Sort folders and scripts within each folder
+                Progress.Report(progressId, 0.95f, "Sorting results...");
+                EditorUtility.DisplayProgressBar("Analyzing Scene Scripts", "Sorting results...", 0.95f);
+
+                var sortedFolders = scriptsByFolder.Keys.OrderBy(k => k).ToList();
+                var newDict = new Dictionary<string, List<string>>();
+
+                foreach (string folder in sortedFolders)
+                {
+                    newDict[folder] = scriptsByFolder[folder].OrderBy(s => s).ToList();
+                }
+
+                scriptsByFolder = newDict;
+
+                Progress.Report(progressId, 1.0f, "Analysis complete!");
+
+                Debug.Log($"Scene analysis complete. Found {uniqueScripts.Count} unique scripts across {scriptsByFolder.Count} folders from {totalObjects} GameObjects.");
+            }
+            finally
             {
-                string folderPath = Path.GetDirectoryName(scriptPath);
-                string fileName = Path.GetFileName(scriptPath);
-
-                if (string.IsNullOrEmpty(folderPath))
-                    folderPath = "Root";
-
-                if (!scriptsByFolder.ContainsKey(folderPath))
-                    scriptsByFolder[folderPath] = new List<string>();
-
-                scriptsByFolder[folderPath].Add(fileName);
+                Progress.Finish(progressId);
+                EditorUtility.ClearProgressBar();
             }
-
-            // Sort folders and scripts within each folder
-            var sortedFolders = scriptsByFolder.Keys.OrderBy(k => k).ToList();
-            var newDict = new Dictionary<string, List<string>>();
-
-            foreach (string folder in sortedFolders)
-            {
-                newDict[folder] = scriptsByFolder[folder].OrderBy(s => s).ToList();
-            }
-
-            scriptsByFolder = newDict;
-
-            Debug.Log(
-                $"Scene analysis complete. Found {uniqueScripts.Count} unique scripts across {scriptsByFolder.Count} folders.");
         }
 
         private string GetScriptPath(System.Type scriptType)
@@ -218,12 +251,7 @@ namespace HERMIT_SCRIPTS
             if (fullPath == "Root") return "Root";
 
             string[] parts = fullPath.Split('/');
-            if (parts.Length > 2)
-            {
-                return ".../" + string.Join("/", parts.Skip(parts.Length - 2));
-            }
-
-            return fullPath;
+            return parts.Length > 2 ? ".../" + string.Join("/", parts.Skip(parts.Length - 2)) : fullPath;
         }
     }
 }
